@@ -74,16 +74,14 @@ class ServerlessStepFunctionsLocal {
       throw new Error('service path not found');
     }
 
-    const configPath = path.join(servicePath, 'serverless.yml');
+    await this.parseYaml();
 
-    const parsed = await this.serverless.yamlParser.parse(configPath);
+    this.stateMachines = this.service.stepFunctions.stateMachines;
 
-    this.stateMachines = parsed.stepFunctions.stateMachines;
-
-    if (parsed.custom 
-      && parsed.custom.stepFunctionsLocal
-      && parsed.custom.stepFunctionsLocal.TaskResourceMapping) {
-        this.replaceTaskResourceMappings(parsed.stepFunctions.stateMachines, parsed.custom.stepFunctionsLocal.TaskResourceMapping);
+    if (this.service.custom 
+      && this.service.custom.stepFunctionsLocal
+      && this.service.custom.stepFunctionsLocal.TaskResourceMapping) {
+        this.replaceTaskResourceMappings(this.service.stepFunctions.stateMachines, this.service.custom.stepFunctionsLocal.TaskResourceMapping);
     }
   }
 
@@ -115,6 +113,57 @@ class ServerlessStepFunctionsLocal {
     endpoints.forEach(endpoint => {
       process.env[`OFFLINE_STEP_FUNCTIONS_ARN_${endpoint.stateMachineArn.split(':')[6]}`] = endpoint.stateMachineArn;
     });
+  }
+
+  /**
+   * Adds the step function configuration to the serverless config
+   * @author serverless-step-functions
+   */
+  parseYaml() {
+    const servicePath = this.serverless.config.servicePath;
+    if (!servicePath) {
+      return Promise.resolve();
+    }
+
+    const fromYamlFile = serverlessYmlPath => this.serverless.yamlParser.parse(serverlessYmlPath);
+
+    let parse = null;
+    const serviceFileName = this.options.config || this.serverless.config.serverless.service.serviceFilename || 'serverless.yml';
+    const serverlessYmlPath = path.join(servicePath, serviceFileName);
+
+    if (['.js', '.json'].includes(path.extname(serverlessYmlPath))) {
+      parse = this.loadFromRequiredFile;
+    } else {
+      parse = fromYamlFile;
+    }
+    return parse(serverlessYmlPath)
+      .then(serverlessFileParam => this.serverless.variables.populateObject(serverlessFileParam)
+        .then((parsedObject) => {
+          this.serverless.service.stepFunctions = {
+            validate: parsedObject.stepFunctions ? parsedObject.stepFunctions.validate : false,
+          };
+          this.serverless.service.stepFunctions.stateMachines = parsedObject.stepFunctions
+          && parsedObject.stepFunctions.stateMachines
+            ? parsedObject.stepFunctions.stateMachines : {};
+          this.serverless.service.stepFunctions.activities = parsedObject.stepFunctions
+          && parsedObject.stepFunctions.activities
+            ? parsedObject.stepFunctions.activities : [];
+
+          if (!this.serverless.pluginManager.cliOptions.stage) {
+            this.serverless.pluginManager.cliOptions.stage = this.options.stage
+              || (this.serverless.service.provider && this.serverless.service.provider.stage)
+              || 'dev';
+          }
+
+          if (!this.serverless.pluginManager.cliOptions.region) {
+            this.serverless.pluginManager.cliOptions.region = this.options.region
+              || (this.serverless.service.provider && this.serverless.service.provider.region)
+              || 'us-east-1';
+          }
+
+          this.serverless.variables.populateService(this.serverless.pluginManager.cliOptions);
+          return Promise.resolve();
+        }));
   }
 }
 
